@@ -1,101 +1,160 @@
-import Image from "next/image";
+"use client";
+import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/utils/supabaseClient";
+import { useAuth } from "@/context/AuthContext";
+import Navbar from "@/components/Navbar";
+import NotesList, { Note } from "@/components/NotesList";
+import NoteDetail from "@/components/NoteDetail";
+import Fab from "@/components/Fab";
 
-export default function Home() {
+const NotesHome: React.FC = () => {
+  const { user, loading: userLoading } = useAuth();
+  const router = useRouter();
+
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [searchValue, setSearchValue] = useState("");
+
+  // CRUD
+  async function fetchNotes() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("notes")
+      .select("*")
+      .eq("user_id", user?.id ?? "INVALID")
+      .order("updated_at", { ascending: false });
+    setLoading(false);
+    if (!error) {
+      setNotes(data as Note[]);
+      // Auto-select the first if nothing
+      if (!selectedId && data.length > 0) setSelectedId(data[0].id);
+    }
+  }
+
+  useEffect(() => {
+    if (user) {
+      fetchNotes();
+    } else if (!userLoading) {
+      router.replace("/auth");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, userLoading]);
+
+  // Filter notes for the search bar
+  const filteredNotes = searchValue.trim()
+    ? notes.filter(n =>
+        n.title?.toLowerCase().includes(searchValue.toLowerCase()) ||
+        n.content?.toLowerCase().includes(searchValue.toLowerCase())
+      )
+    : notes;
+
+  // Get selected note in list
+  const selectedNote = notes.find((n) => n.id === selectedId) ?? null;
+
+  // Create new
+  const [isCreating, setIsCreating] = useState(false);
+
+  const handleCreateNote = async (title: string, content: string) => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("notes")
+      .insert([{ title, content, user_id: user?.id }])
+      .select()
+      .single();
+    setLoading(false);
+    if (!error && data) {
+      setIsCreating(false);
+      setNotes((prev) => [data as Note, ...prev]);
+      setSelectedId(data.id);
+    }
+    if (error) throw new Error(error.message);
+  };
+
+  // Update
+  const handleUpdateNote = async (title: string, content: string) => {
+    if (!selectedNote) return;
+    setLoading(true);
+    const { error } = await supabase
+      .from("notes")
+      .update({ title, content, updated_at: new Date().toISOString() })
+      .eq("id", selectedNote.id);
+    setLoading(false);
+    if (!error) {
+      setNotes((prev) =>
+        prev.map((n) =>
+          n.id === selectedNote.id ? { ...n, title, content, updated_at: new Date().toISOString() } : n
+        )
+      );
+    }
+    if (error) throw new Error(error.message);
+  };
+
+  // Delete
+  const handleDeleteNote = async () => {
+    if (!selectedNote) return;
+    setLoading(true);
+    const { error } = await supabase.from("notes").delete().eq("id", selectedNote.id);
+    setLoading(false);
+    if (!error) {
+      setNotes((prev) => prev.filter((n) => n.id !== selectedNote.id));
+      setSelectedId((prev) => {
+        const idx = notes.findIndex((n) => n.id === prev);
+        return notes[idx + 1]?.id || notes[idx - 1]?.id || null;
+      });
+    }
+    if (error) throw new Error(error.message);
+  };
+
+  if (userLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <span className="animate-pulse">Loading ...</span>
+      </div>
+    );
+  }
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
+    <div className="min-h-screen bg-[var(--background)] flex flex-col">
+      <Navbar />
+      <main className="flex flex-1 min-h-0">
+        <NotesList
+          notes={filteredNotes}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          searchValue={searchValue}
+          setSearchValue={setSearchValue}
         />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+        <div className="flex-1 min-w-0 border-l border-gray-200 bg-[var(--background)] relative">
+          {isCreating ? (
+            <NoteDetail
+              note={{ id: "", title: "", content: "", created_at: "", updated_at: "" }}
+              onSave={handleCreateNote}
+              onDelete={async () => {
+                setIsCreating(false);
+              }}
+              loading={loading}
+              isNew
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+          ) : (
+            <NoteDetail
+              note={selectedNote}
+              onSave={handleUpdateNote}
+              onDelete={handleDeleteNote}
+              loading={loading}
+            />
+          )}
         </div>
       </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      <Fab
+        onClick={() => {
+          setIsCreating(true);
+          setSelectedId(null);
+        }}
+      />
     </div>
   );
-}
+};
+
+export default NotesHome;
